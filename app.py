@@ -1,466 +1,397 @@
-"""Dasbor edukatif: komparasi K-Means, DBSCAN dan Agglomerative Clustering.
+"""Streamlit Topik 3 - Association Rule Mining Online Retail (Kelompok 2).
 
-Eksekusi: streamlit run app.py
+Start: streamlit run app.py
+Implementasi ini tidak melakukan clustering.
 """
 from __future__ import annotations
 
-import hashlib
+import io
 import json
-from pathlib import Path
-from typing import Any
+from collections import Counter
+from zipfile import ZIP_DEFLATED, ZipFile
 
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from sklearn.decomposition import PCA
 
-from src.benchmark import ALGORITHMS, Parameters, environment_info, run_algorithm
-from src.evaluation import cluster_details, evaluate_clustering
-from src.preprocessing import (
-    RFM_COLUMNS, build_customer_rfm, file_sha256,
-    make_features, read_online_retail, validate_rfm,
-)
-
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-APP_VERSION = "1.0.0"
+from src.benchmark import BenchmarkResult, run_benchmark
+from src.data import ROOT, baskets_subset, counts_frame, load_audit, load_baskets, load_products
+from src.mining import min_count_for
+from src.rules import make_rules
 
 st.set_page_config(
-    page_title="Lab Clustering | UCI Online Retail",
-    page_icon="📊",
+    page_title="Lab Association Rule Mining | Kelompok 2",
+    page_icon="🛒",
     layout="wide",
     initial_sidebar_state="expanded",
 )
-st.markdown(
-    """<style>
-      .block-container {padding-top: 1.9rem; max-width: 1420px}
-      .big-note {font-size: 1.05rem; color: #475569}
-      div[data-testid='stMetric'] {background: #F5F8FC; border:1px solid #E5EBF4;
-        padding: 12px 16px; border-radius: 12px}
-      div[data-testid='stMetricLabel'] {font-weight: 650}
-      h1,h2,h3 {letter-spacing: -.025em}
-      div.stButton > button[kind='primary'] {font-weight: 700}
-    </style>""",
-    unsafe_allow_html=True,
-)
 
-@st.cache_data(show_spinner="Menyiapkan fitur pelanggan...")
-def load_packaged_data() -> tuple[pd.DataFrame, dict[str, Any]]:
-    csv = pd.read_csv(DATA_DIR / "customer_rfm.csv", dtype={"CustomerID": str})
-    audit = json.loads((DATA_DIR / "audit.json").read_text(encoding="utf-8"))
-    return validate_rfm(csv), audit
-
-@st.cache_data(show_spinner="Membaca dan memproses Excel; dataset besar dapat memerlukan waktu...")
-def load_xlsx_bytes(content: bytes) -> tuple[pd.DataFrame, dict[str, Any]]:
-    raw = read_online_retail(content)
-    customer_rfm, audit = build_customer_rfm(raw)
-    audit["sha256_xlsx"] = file_sha256(content)
-    audit["sumber"] = "Excel unggahan pengguna"
-    return validate_rfm(customer_rfm), audit
-
-@st.cache_data(show_spinner=False)
-def load_csv_bytes(content: bytes) -> tuple[pd.DataFrame, dict[str, Any]]:
-    csv = pd.read_csv(__import__("io").BytesIO(content), dtype={"CustomerID": str})
-    df = validate_rfm(csv)
-    return df, {
-        "sumber": "CSV RFM unggahan pengguna", "sha256_csv": file_sha256(content),
-        "jumlah_pelanggan": len(df),
-        "catatan": "Data RFM telah dihitung oleh pengguna; audit transaksi mentah tidak tersedia.",
-    }
+st.markdown("""
+<style>
+    .block-container {padding-top: 1.7rem; padding-bottom: 2.8rem;}
+    h1, h2, h3 {letter-spacing: -0.025em;}
+    div[data-testid="stMetric"] {background: rgba(31, 146, 184, .08); border: 1px solid rgba(36, 138, 180, .20);
+      padding: .85rem 1rem; border-radius: .75rem;}
+    section[data-testid="stSidebar"] {border-right: 1px solid rgba(90, 120, 160, .18);}
+    .hero {background: linear-gradient(115deg, #061a3d, #105a86); color: white; padding: 24px 28px;
+       border-radius: 16px; margin-bottom: 15px;}
+    .hero h1 {color:#f4f9ff; margin:0 0 6px 0; font-size:2.05rem;}
+    .hero p {color:#dbf5ff; margin:0; font-size:1.02rem;}
+    .hero .eyebrow {color:#58e4ef; font-size:.82rem; font-weight:700; letter-spacing:.1em; margin-bottom:6px;}
+    .mini {color:#657991; font-size:.88rem;}
+</style>
+""", unsafe_allow_html=True)
 
 
-def stable_signature(**kwargs: Any) -> str:
-    return hashlib.sha256(json.dumps(kwargs, sort_keys=True, default=str).encode()).hexdigest()
+@st.cache_data(show_spinner="Memuat 19.960 basket dari dataset pra-pemrosesan…")
+def get_data():
+    invoice_ids, baskets = load_baskets()
+    products, audit = load_products(), load_audit()
+    return invoice_ids, baskets, products, audit
 
 
-def number_metric(value: float, decimals: int = 3) -> str:
-    return "—" if pd.isna(value) else f"{value:,.{decimals}f}"
+invoice_ids, baskets, products, audit = get_data()
 
+st.markdown("""
+<div class="hero">
+  <div class="eyebrow">KELOMPOK 2 · TOPIK 3 · ANALISIS DAN DESAIN ALGORITMA</div>
+  <h1>Lab Association Rule Mining</h1>
+  <p>Perbandingan Apriori, FP-Growth, dan Eclat pada dataset UCI Online Retail</p>
+</div>
+""", unsafe_allow_html=True)
+st.caption("Objek penelitian: transaksi per InvoiceNo dan kemunculan StockCode. **Bukan clustering dan bukan RFM pelanggan.**")
 
-def plot_clusters(X: np.ndarray, labels: np.ndarray, rfm: pd.DataFrame, mode: str, seed: int):
-    if mode == "UMAP (opsional)":
-        try:
-            from umap import UMAP
-        except ImportError:
-            st.warning("Paket UMAP belum terpasang. Jalankan `pip install umap-learn` atau pilih PCA.")
-            return None
-        points = UMAP(n_components=2, random_state=seed, n_neighbors=min(15, len(X) - 1)).fit_transform(X)
-        x_label, y_label = "UMAP 1", "UMAP 2"
-        explanation = "UMAP menekankan kedekatan lokal; jarak pada grafik tidak mewakili jarak numerik asli."
-    else:
-        pca = PCA(n_components=2, random_state=seed)
-        points = pca.fit_transform(X)
-        ratios = pca.explained_variance_ratio_
-        x_label = f"PC1 ({ratios[0]:.1%} variasi)"
-        y_label = f"PC2 ({ratios[1]:.1%} variasi)"
-        explanation = f"PCA menampilkan {ratios.sum():.1%} variasi fitur; skor kualitas tetap dihitung pada 3 dimensi fitur."
-    plot_df = rfm.copy()
-    plot_df["Dimensi 1"] = points[:, 0]
-    plot_df["Dimensi 2"] = points[:, 1]
-    plot_df["Label"] = ["Noise (-1)" if x == -1 else f"Klaster {x}" for x in labels]
-    fig = px.scatter(
-        plot_df,
-        x="Dimensi 1", y="Dimensi 2", color="Label",
-        hover_data={"CustomerID": True, "Recency": True, "Frequency": True, "Monetary": ":.2f"},
-        opacity=0.73, render_mode="webgl",
-        color_discrete_sequence=px.colors.qualitative.Safe,
-        title=f"Proyeksi {mode.split(' ')[0]} — label clustering",
+with st.sidebar:
+    st.header("⚙️ Pengaturan eksperimen")
+    mode = st.radio(
+        "Paket skenario",
+        ["Demonstrasi cepat", "Replikasi 9 skenario slide", "Atur sendiri"],
+        help="Skenario slide = 25/50/100% invoice × support 3/5/8%. Tiga algoritma dijalankan untuk setiap kondisi.",
     )
-    fig.update_traces(marker={"size": 6})
-    fig.update_layout(legend_title="Kelompok", height=540, margin=dict(l=20, r=20, t=55, b=20))
-    fig.update_xaxes(title=x_label)
-    fig.update_yaxes(title=y_label)
-    return fig, explanation
-
-
-def run_experiment(
-    rfm: pd.DataFrame, cap: int, ratios: list[int], p: Parameters,
-    scaler: str, quantile: float, do_memory: bool,
-) -> dict[str, Any]:
-    rng = np.random.default_rng(p.seed)
-    order = rng.permutation(len(rfm))[:cap]
-    total_steps = len(ratios) * len(ALGORITHMS)
-    progress = st.progress(0, text="Menyiapkan benchmark...")
-    summary_rows, raw_rows, detail_rows = [], [], []
-    labels_by_key, indices_by_ratio = {}, {}
-    for ratio in sorted(ratios):
-        size = max(1, int(np.floor(cap * ratio / 100)))
-        indices = np.sort(order[:size])
-        sample = rfm.iloc[indices].reset_index(drop=True)
-        X, _ = make_features(sample, scaler, quantile)
-        indices_by_ratio[ratio] = indices
-        for algorithm in ALGORITHMS:
-            progress.progress(
-                len(summary_rows) / total_steps,
-                text=f"Menghitung {algorithm} | {ratio}% ({len(X)} pelanggan)",
-            )
-            try:
-                labels, stats, per_run = run_algorithm(X, algorithm, p, measure_memory=do_memory)
-                scores = evaluate_clustering(X, labels, seed=p.seed)
-                summary_rows.append({"Proporsi": f"{ratio}%", "Proporsi_angka": ratio,
-                                     "Pelanggan": len(sample), "Algoritma": algorithm,
-                                     **stats, **scores, "Status": "OK", "Galat": ""})
-                raw_rows.extend({"Proporsi": f"{ratio}%", "Pelanggan": len(sample), **v} for v in per_run)
-                details = cluster_details(sample, labels)
-                details.insert(0, "Algoritma", algorithm)
-                details.insert(0, "Proporsi", f"{ratio}%")
-                detail_rows.append(details)
-                labels_by_key[(ratio, algorithm)] = labels
-            except (ValueError, MemoryError) as exc:
-                summary_rows.append({"Proporsi": f"{ratio}%", "Proporsi_angka": ratio,
-                                     "Pelanggan": len(sample), "Algoritma": algorithm,
-                                     "Status": "Gagal", "Galat": str(exc)})
-    progress.progress(1.0, text="Pengujian selesai.")
-    return {
-        "summary": pd.DataFrame(summary_rows),
-        "raw": pd.DataFrame(raw_rows),
-        "profiles": pd.concat(detail_rows, ignore_index=True) if detail_rows else pd.DataFrame(),
-        "labels": labels_by_key, "indices": indices_by_ratio,
-        "metadata": {
-            "versi": APP_VERSION, "cap_pelanggan": cap, "proporsi": sorted(ratios),
-            "random_seed": p.seed, "k": p.k, "eps": p.eps,
-            "min_samples": p.min_samples, "repetisi": p.repeats,
-            "warmup": p.warmups, "scaler": scaler, "batas_kuantil": quantile,
-            "fit_model": "fit_predict termasuk inisialisasi estimator, tanpa baca Excel/CSV, tanpa scaling, tanpa evaluasi",
-            "silhouette": "non-noise, sampel terstratifikasi maksimal 1200 jika diperlukan",
-            "memori": "satu eksekusi tambahan; tracemalloc Python peak dan RSS peak sampled relatif baseline (belum terisolasi)",
-            "lingkungan": environment_info(),
-        },
-    }
-
-
-st.title("Lab Clustering Online Retail")
-st.markdown(
-    '<p class="big-note">Komparasi <b>K-Means</b>, <b>DBSCAN</b>, dan '
-    '<b>Agglomerative Clustering</b> untuk segmentasi pelanggan berbasis RFM.</p>',
-    unsafe_allow_html=True,
-)
-st.info(
-    "**Penting:** Tugas Kelompok 2 adalah clustering. PowerPoint lama membahas "
-    "**association rule mining (Apriori, FP-Growth, Eclat)**; keduanya berbeda sasaran, "
-    "parameter, hasil, dan metrik evaluasi."
-)
-
-with st.sidebar:
-    st.header("1. Sumber data")
-    source = st.radio("Pilih sumber", ["Dataset RFM bawaan", "Unggah Excel Online Retail", "Unggah CSV RFM"],
-                      label_visibility="collapsed")
-    uploaded = None
-    if source != "Dataset RFM bawaan":
-        uploaded = st.file_uploader(
-            "Berkas sumber", type=["xlsx"] if "Excel" in source else ["csv"],
-            help="Excel akan dibersihkan lalu diagregasi menjadi satu baris per CustomerID.",
-        )
-    st.divider()
-    st.header("2. Pra-pemrosesan")
-    scaler = st.selectbox("Skalasi fitur", ["StandardScaler", "RobustScaler"],
-                          help="Semua fitur memakai log1p terlebih dahulu; scaler di-fit ulang per subset.")
-    quantile_pct = st.selectbox("Batas nilai ekstrem", [100, 99, 95], index=0,
-                                format_func=lambda x: "Tanpa pemotongan" if x == 100 else f"Kuantil {x}%")
-    seed = int(st.number_input("Seed acak", min_value=0, max_value=9999999, value=42, step=1))
-
-try:
-    if source == "Dataset RFM bawaan":
-        rfm, audit = load_packaged_data()
-        input_hash = audit.get("sha256_xlsx", "")
-    elif uploaded is None:
-        st.warning("Unggah berkas terlebih dahulu atau gunakan dataset bawaan.")
-        st.stop()
-    elif "Excel" in source:
-        content = uploaded.getvalue()
-        rfm, audit = load_xlsx_bytes(content)
-        input_hash = file_sha256(content)
+    if mode == "Demonstrasi cepat":
+        fractions, supports = [25], [3]
+        repeats = st.number_input("Pengulangan waktu", min_value=1, max_value=10, value=3, step=1)
+        st.info("Mode cepat: 4.990 invoice × support 3% × 3 algoritma (aturan asosiasi muncul).")
+    elif mode == "Replikasi 9 skenario slide":
+        fractions, supports = [25, 50, 100], [3, 5, 8]
+        repeats = st.number_input("Pengulangan waktu", min_value=1, max_value=10, value=10, step=1)
+        st.warning("Mode lengkap: 9 kondisi × 3 algoritma × 10 ulangan = 270 pengukuran waktu. Aktifkan checkbox memori bila ingin 27 run memori tambahan (lebih lambat).")
     else:
-        content = uploaded.getvalue()
-        rfm, audit = load_csv_bytes(content)
-        input_hash = file_sha256(content)
-except (ValueError, OSError, ImportError) as exc:
-    st.error(f"Tidak dapat menyiapkan data: {exc}")
-    st.stop()
-
-with st.sidebar:
+        fractions = st.multiselect("Proporsi invoice (%)", [25, 50, 100], default=[25, 50, 100])
+        supports = st.multiselect("Min support (%)", [3, 5, 8], default=[3, 5, 8])
+        repeats = st.number_input("Pengulangan waktu", min_value=1, max_value=10, value=3, step=1)
+    seed = st.number_input("Seed pengambilan invoice", value=42, step=1)
+    max_len = st.selectbox("Batas panjang itemset (L)", [3, 2, 1], index=0)
+    memory_enabled = st.checkbox("Ukur memori Python (run terpisah)", value=(mode != "Replikasi 9 skenario slide"), key=f"ukur_memori_{mode}",
+                                 help="Pada mode lengkap, pengukuran tracemalloc untuk 27 kombinasi dapat berlangsung lama. Aktifkan setelah benchmark waktu selesai bila memori diperlukan.")
     st.divider()
-    st.header("3. Eksperimen")
-    max_cap = min(3000, len(rfm))
-    min_cap = min(50, max_cap)
-    cap = st.slider("Batas pelanggan bersama", min_value=min_cap, max_value=max_cap,
-                    value=min(1200, max_cap), step=1,
-                    help="Batas ini berlaku sama untuk K-Means, DBSCAN, dan Agglomerative; "
-                         "menghindari perbandingan tidak adil dan beban kuadratik.")
-    ratios = st.multiselect("Proporsi dari batas bersama", [25, 50, 100], default=[25, 50, 100],
-                            format_func=lambda v: f"{v}%")
-    k_max = max(2, min(12, cap // 5))
-    k = st.slider("Jumlah klaster K-Means & Agglomerative (k)", 2, k_max, min(4, k_max))
-    eps = st.slider("DBSCAN: eps (jarak dalam ruang terskalakan)", 0.1, 4.0, 0.50, 0.05)
-    min_samples = st.slider("DBSCAN: min_samples", 2, min(50, cap - 1), min(8, cap - 1))
-    repeats = st.slider("Ulangan waktu", 1, 10, 3, help="Slide menggunakan 10 ulangan; default 3 lebih ringan.")
-    warmups = st.selectbox("Warm-up sebelum timing", [0, 1], index=0)
-    do_memory = st.checkbox("Ukur memori (1 fit tambahan/algoritma/kondisi)", value=True)
-    st.caption("Batas atas 3.000 pelanggan sebagai perlindungan untuk DBSCAN dan Agglomerative. "
-               "Untuk benchmark keras, jalankan ulang dengan isolasi proses/mesin.")
+    st.caption("**Rekomendasi presentasi:** demonstrasi cepat terlebih dahulu, lalu jalankan mode lengkap untuk hasil laporan. Gunakan seed 42 dan L=3 agar identik dengan rancangan slide.")
+    st.caption("Aplikasi ini versi Association Rule Mining. Untuk mengganti deployment lama di Streamlit Cloud, unggah proyek ini ke repositori yang digunakan aplikasi.")
 
-params = Parameters(k=k, eps=eps, min_samples=min_samples, seed=seed,
-                    repeats=repeats, warmups=warmups)
-signature = stable_signature(
-    source=input_hash, n=len(rfm), cap=cap, ratios=sorted(ratios),
-    params=vars(params), scaler=scaler, quantile=quantile_pct, memory=do_memory,
-)
+signature = (tuple(fractions), tuple(supports), int(repeats), int(seed), int(max_len), bool(memory_enabled))
+if "run" not in st.session_state:
+    st.session_state.run = None
+if "run_signature" not in st.session_state:
+    st.session_state.run_signature = None
 
-metrics = st.columns(4)
-metrics[0].metric("Pelanggan siap cluster", f"{len(rfm):,}")
-metrics[1].metric("Batas eksperimen", f"{cap:,}")
-metrics[2].metric("Fitur model", "3 (RFM)")
-metrics[3].metric("Skenario", f"{len(ratios)*3}" if ratios else "0")
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Baris sumber", f"{audit['baris_awal']:,}".replace(",", "."))
+m2.metric("Baris valid", f"{audit['baris_valid']:,}".replace(",", "."))
+m3.metric("Transaksi invoice", f"{len(baskets):,}".replace(",", "."))
+m4.metric("Kode produk unik", f"{audit['jumlah_produk_unik']:,}".replace(",", "."))
 
-tab_data, tab_experiment, tab_visual, tab_method = st.tabs(
-    ["Data & Audit", "Benchmark & Evaluasi", "Visualisasi Klaster", "Metodologi & Unduhan"]
-)
+TAB_NAMES = ["1 · Dataset & Pembersihan", "2 · Benchmark", "3 · Itemset & Validasi",
+             "4 · Aturan Asosiasi", "5 · Metodologi & Unduhan"]
+tab_data, tab_bench, tab_item, tab_rule, tab_method = st.tabs(TAB_NAMES)
+
+
+def pretty_int(number: int) -> str:
+    return f"{number:,}".replace(",", ".")
+
+
+def csv_bytes(df: pd.DataFrame) -> bytes:
+    return df.to_csv(index=False).encode("utf-8-sig")
+
+
+def result_if_available() -> BenchmarkResult | None:
+    return st.session_state.run
+
+
 with tab_data:
-    st.subheader("Audit dataset dan pembentukan RFM")
-    st.write(
-        "Sumber Online Retail berupa **baris item transaksi**. Analisis ini mengubah baris-baris "
-        "valid menjadi **satu pengamatan per CustomerID**, lalu menghitung Recency, Frequency, Monetary."
-    )
-    a = audit
-    if "baris_awal" in a:
-        c = st.columns(4)
-        c[0].metric("Baris awal Excel", f"{a['baris_awal']:,}")
-        c[1].metric("Baris valid filter dasar", f"{a['baris_valid_aturan_asosiasi']:,}")
-        c[2].metric("Baris valid untuk RFM", f"{a['baris_valid_rfm']:,}")
-        c[3].metric("CustomerID tidak tersedia*", f"{a['baris_tanpa_customer_id_setelah_filter_dasar']:,}")
-        st.caption("*Dihitung setelah filter transaksi dasar. Jumlah berbagai jenis baris yang tersaring "
-                   "tidak boleh dijumlahkan karena kondisi dapat bertumpang tindih.")
-        st.write(f"Invoice valid pada pembersihan dasar: **{a['jumlah_invoice_valid_dasar']:,}**; "
-                 f"invoice valid dengan identitas pelanggan: **{a['jumlah_invoice_valid_rfm']:,}**. "
-                 f"Tanggal referensi Recency: **{a['tanggal_referensi']}**.")
-    else:
-        st.caption("CSV yang diunggah sudah berupa RFM; hanya validasi struktur dan nilai yang dilakukan.")
-    st.markdown("**Cuplikan data RFM**")
-    st.dataframe(rfm.head(25), use_container_width=True, hide_index=True)
-    st.markdown("**Distribusi nilai asli (sebelum log1p dan scaling)**")
-    dist = rfm[list(RFM_COLUMNS)].describe(percentiles=[.25, .5, .75, .95]).T
-    st.dataframe(dist.round(2), use_container_width=True)
-    st.caption("Unit: Recency = hari, Frequency = invoice unik, Monetary = nilai penjualan bruto (GBP pada sumber UCI). "
-               "Nominal tidak ditafsirkan sebagai laba atau setelah dikurangi retur.")
-    st.download_button("Unduh fitur pelanggan (CSV)",
-                       data=rfm.to_csv(index=False).encode("utf-8-sig"),
-                       file_name="online_retail_customer_rfm.csv", mime="text/csv")
+    st.subheader("Satuan data yang dianalisis")
+    st.markdown("""
+Dataset UCI Online Retail berisi baris barang dalam transaksi. **Satu InvoiceNo dianggap satu transaksi**,
+sementara item adalah **StockCode**. Jika kode barang sama muncul berkali-kali di invoice yang sama,
+frekuensinya tetap dihitung **satu kali**. `CustomerID` boleh kosong karena tujuan analisis adalah
+menemukan *ko-kemunculan barang*, bukan mengenali pelanggan.
+""")
+    left, right = st.columns([1.2, 1])
+    with left:
+        st.markdown("#### Audit pembersihan")
+        audit_table = pd.DataFrame([
+            ("Baris input", audit["baris_awal"]),
+            ("Baris valid setelah filter", audit["baris_valid"]),
+            ("Invoice unik valid", audit["jumlah_invoice"]),
+            ("StockCode unik valid", audit["jumlah_produk_unik"]),
+            ("Kehadiran item unik per invoice", audit["total_kemunculan_produk_unik_dalam_invoice"]),
+        ], columns=["Ukuran", "Jumlah"])
+        st.dataframe(audit_table, hide_index=True, use_container_width=True)
+        st.markdown("""**Filter:** hapus InvoiceNo kosong atau berawalan `C` (pembatalan),
+StockCode kosong, `Quantity ≤ 0`, serta `UnitPrice ≤ 0`.
+Hitungan alasan penolakan dapat bertumpang tindih dan **tidak** boleh dijumlahkan.
+""")
+        st.caption(f"SHA-256 Excel sumber: `{audit['sha256_sumber']}`")
+    with right:
+        st.markdown("#### Contoh lima basket")
+        preview = pd.DataFrame({
+            "InvoiceNo": invoice_ids[:5],
+            "Jumlah barang unik": [len(b) for b in baskets[:5]],
+            "Contoh StockCode": [", ".join(sorted(x)[:7]) for x in baskets[:5]],
+        })
+        st.dataframe(preview, hide_index=True, use_container_width=True)
+        st.caption("Basket berasal dari CSV pra-pemrosesan yang disertakan; tidak perlu membaca ulang Excel 23 MB pada setiap klik.")
+    st.markdown("#### Kode barang paling sering muncul (jumlah invoice, bukan jumlah unit terjual)")
+    item_counter = Counter(item for basket in baskets for item in basket)
+    top = pd.DataFrame([{"StockCode": k, "Nama": products.get(k, ""), "Invoice": v,
+                         "Support (%)": 100 * v / len(baskets)} for k, v in item_counter.most_common(15)])
+    st.bar_chart(top.set_index("StockCode")["Invoice"], height=240)
+    st.dataframe(top, hide_index=True, use_container_width=True)
+    st.download_button("Unduh dataset basket pra-pemrosesan (.csv.gz)",
+                       (ROOT / "data" / "transactions.csv.gz").read_bytes(),
+                       file_name="online_retail_basket.csv.gz", mime="application/gzip")
 
-with tab_experiment:
-    st.subheader("Pengujian terkontrol dengan tiga algoritma")
-    st.write("Setiap kombinasi proporsi menggunakan **pelanggan dan matriks fitur yang sama** "
-             "untuk ketiga algoritma. Subset proporsi bersarang dengan seed tetap. "
-             "Waktu merupakan median pengulangan `fit_predict` (preprocessing dan evaluasi tidak dihitung).")
-    if not ratios:
-        st.warning("Pilih minimal satu proporsi pada panel kiri.")
-    if cap > 2000:
-        st.warning("Batas pelanggan cukup tinggi. DBSCAN/Agglomerative memiliki risiko waktu dan memori "
-                   "kuadratik; gunakan 1.200–2.000 bila perangkat terbatas.")
-    if st.button("▶ Jalankan benchmark", type="primary", disabled=not bool(ratios), use_container_width=True):
+with tab_bench:
+    st.subheader("Jalankan perbandingan Apriori, FP-Growth, Eclat")
+    st.markdown("""
+Setiap kondisi menggunakan **invoice dan ambang support yang sama**. Waktu diulang,
+median dipakai sebagai ringkasan utama, dan `tracemalloc` dijalankan **satu kali terpisah**
+untuk menghindari tambahan overhead pada pengukuran waktu.
+""")
+    n_cases = len(fractions) * len(supports)
+    st.info(f"Konfigurasi aktif: **{n_cases} skenario**, **{n_cases * 3} kombinasi algoritma**, "
+            f"**{n_cases * 3 * int(repeats)}** pengukuran waktu. L={max_len}, seed={seed}.")
+    if max_len != 3 or seed != 42:
+        st.warning("Seed atau panjang itemset berbeda dari protokol PowerPoint. Hasil jumlah itemset dapat berubah.")
+    ready = bool(fractions and supports)
+    if st.button("▶ Jalankan benchmark sesuai pengaturan", type="primary", disabled=not ready):
+        bar = st.progress(0.0)
+        status = st.empty()
+        def progress(done, total, message):
+            bar.progress(min(1.0, done / max(1, total)))
+            status.caption(f"Proses {done}/{total}: {message}")
         try:
-            with st.spinner("Eksperimen berjalan di sesi Streamlit ini..."):
-                output = run_experiment(
-                    rfm, cap, ratios, params, scaler, quantile_pct / 100, do_memory
+            with st.spinner("Menjalankan perhitungan. Jangan refresh halaman saat benchmark berlangsung."):
+                result = run_benchmark(
+                    baskets, fractions=fractions, supports=supports, repeats=int(repeats),
+                    seed=int(seed), max_len=int(max_len), measure_memory=memory_enabled,
+                    progress=progress,
                 )
-            output["signature"] = signature
-            output["metadata"]["sumber_data"] = audit
-            output["metadata"]["input_sha256"] = input_hash
-            st.session_state["hasil_klaster"] = output
+            st.session_state.run = result
+            st.session_state.run_signature = signature
+            st.success("Benchmark selesai. Semua frequent itemset beserta support count identik antaralgoritma untuk setiap skenario.")
         except Exception as exc:
-            st.error(f"Eksperimen terhenti: {type(exc).__name__}: {exc}")
-            st.exception(exc)
+            st.session_state.run = None
+            st.session_state.run_signature = None
+            st.error(f"Pengujian dihentikan: {exc}")
 
-output = st.session_state.get("hasil_klaster")
-ready = bool(output is not None and output.get("signature") == signature)
-if output is not None and not ready:
-    with tab_experiment:
-        st.warning("Parameter/sumber data telah berubah. Jalankan benchmark lagi agar hasil sesuai pengaturan saat ini.")
-
-if ready:
-    summary = output["summary"]
-    valid = summary[summary["Status"] == "OK"].copy()
-    with tab_experiment:
-        if valid.empty:
-            st.error("Seluruh percobaan gagal. Periksa parameter dan berkas.")
+    result = result_if_available()
+    if result is None:
+        st.caption("Belum ada hasil pada sesi browser ini. Jalankan benchmark untuk melihat metrik dan grafik.")
+    else:
+        if signature != st.session_state.run_signature:
+            st.warning("Pengaturan sidebar telah berubah setelah benchmark. Hasil di bawah tetap menggunakan konfigurasi saat pengujian terakhir. Jalankan ulang untuk memperbarui.")
+        st.markdown("#### Ringkasan seluruh skenario")
+        show_cols = ["Proporsi (%)", "Support minimum (%)", "Jumlah invoice", "Min count", "Algoritma",
+                     "Itemset frequent", "Median (s)", "Q1 (s)", "Q3 (s)", "CV (%)", "Peak Python (MiB)", "Kesetaraan output"]
+        st.dataframe(result.summary[show_cols], hide_index=True, use_container_width=True)
+        st.caption("CV dihitung dari SD sampel/rata-rata. Jika hanya 1 ulangan, SD dan CV tidak terdefinisi. Q1–Q3 bukan interval kepercayaan.")
+        available_support = sorted(result.summary["Support minimum (%)"].unique().tolist())
+        s_chart = st.selectbox("Pilih support untuk grafik benchmark", available_support, key="benchmark_support")
+        graph = result.summary[result.summary["Support minimum (%)"] == s_chart]
+        c1, c2 = st.columns(2)
+        with c1:
+            time_chart = px.line(graph, x="Jumlah invoice", y="Median (s)", color="Algoritma",
+                                 markers=True, title=f"Skalabilitas empiris | support {s_chart}%",
+                                 hover_data=["Proporsi (%)", "Itemset frequent"])
+            time_chart.update_layout(legend_title_text="Algoritma", xaxis_title="Jumlah invoice")
+            st.plotly_chart(time_chart, use_container_width=True)
+        with c2:
+            time_bar = px.bar(graph, x="Proporsi (%)", y="Median (s)", color="Algoritma",
+                              barmode="group", title="Perbandingan median waktu")
+            st.plotly_chart(time_bar, use_container_width=True)
+        st.markdown("#### Penggunaan memori")
+        if result.memory["Run memori independen"].max() == 0:
+            st.info("Pengukuran memori dimatikan pada benchmark ini.")
         else:
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Pengujian berhasil", f"{len(valid)} / {len(summary)}")
-            c2.metric("Ulangan waktu/sel", str(repeats))
-            c3.metric("Skor internal tersedia", str(int(valid["valid_internal"].sum())))
-            st.markdown("**Hasil utama** — silhouette lebih besar, Davies–Bouldin lebih kecil, "
-                        "Calinski–Harabasz lebih besar. Skor DBSCAN menggunakan data non-noise.")
-            cols = ["Proporsi", "Pelanggan", "Algoritma", "jumlah_klaster", "jumlah_noise",
-                    "cakupan_persen", "silhouette", "davies_bouldin", "calinski_harabasz",
-                    "median_detik", "cv_persen", "python_peak_mib", "rss_delta_peak_mib"]
-            st.dataframe(valid[cols].round(4), use_container_width=True, hide_index=True)
-            colA, colB = st.columns(2)
-            with colA:
-                f1 = px.bar(valid, x="Proporsi", y="median_detik", color="Algoritma", barmode="group",
-                            category_orders={"Proporsi": [f"{p}%" for p in sorted(ratios)]},
-                            title="Median waktu fit_predict (detik)", text_auto=".3f")
-                st.plotly_chart(f1, use_container_width=True)
-            with colB:
-                f2 = px.line(valid, x="Pelanggan", y="median_detik", color="Algoritma", markers=True,
-                             title="Skalabilitas empiris terhadap jumlah pelanggan")
-                st.plotly_chart(f2, use_container_width=True)
-            if do_memory:
-                colC, colD = st.columns(2)
-                with colC:
-                    fm = px.bar(valid, x="Proporsi", y="python_peak_mib", color="Algoritma",
-                                barmode="group", title="Peak alokasi Python (tracemalloc, MiB)")
-                    st.plotly_chart(fm, use_container_width=True)
-                with colD:
-                    fr = px.bar(valid, x="Proporsi", y="rss_delta_peak_mib", color="Algoritma",
-                                barmode="group", title="Perubahan peak RSS tersampel (MiB)")
-                    st.plotly_chart(fr, use_container_width=True)
-                st.caption("Peak tracemalloc bukan total RAM. Sampel RSS adalah pengamatan periodik "
-                           "dalam proses Streamlit yang sama, bukan puncak memori native yang pasti atau hasil terisolasi.")
-            st.markdown("**Kualitas dan penanganan noise**")
-            colE, colF = st.columns(2)
-            with colE:
-                fq = px.bar(valid, x="Proporsi", y="silhouette", color="Algoritma", barmode="group",
-                            title="Silhouette non-noise (jika terdefinisi)")
-                st.plotly_chart(fq, use_container_width=True)
-            with colF:
-                fn = px.bar(valid, x="Proporsi", y="persen_noise", color="Algoritma", barmode="group",
-                            title="Proporsi noise (% semua titik)")
-                st.plotly_chart(fn, use_container_width=True)
-            with st.expander("Lihat detail setiap pengukuran dan catatan validasi"):
-                st.dataframe(summary, use_container_width=True, hide_index=True)
-                st.dataframe(output["raw"], use_container_width=True, hide_index=True)
+            mem_graph = graph.dropna(subset=["Peak Python (MiB)"])
+            m1, m2 = st.columns(2)
+            with m1:
+                fig_mem = px.bar(mem_graph, x="Proporsi (%)", y="Peak Python (MiB)", color="Algoritma",
+                                 barmode="group", title="Peak alokasi Python selama mining")
+                st.plotly_chart(fig_mem, use_container_width=True)
+            with m2:
+                fig_rss = px.bar(mem_graph, x="Proporsi (%)", y="Delta RSS setelah (MiB)", color="Algoritma",
+                                 barmode="group", title="Perubahan RSS (bukan peak RAM)")
+                st.plotly_chart(fig_rss, use_container_width=True)
+            st.caption("Peak tracemalloc hanya alokasi Python yang dilacak pada run terpisah. Delta RSS adalah perubahan sebelum/sesudah, dapat negatif, dan bukan maksimum RAM proses.")
+        st.markdown("#### Waktu setiap ulangan")
+        st.dataframe(result.durations, hide_index=True, use_container_width=True)
+        st.download_button("Unduh seluruh waktu mentah CSV", csv_bytes(result.durations),
+                           file_name="benchmark_ulangan_waktu.csv", mime="text/csv")
 
-    with tab_visual:
-        st.subheader("Eksplorasi klaster dan profil bisnis")
-        ratios_available = sorted(output["indices"])
-        r = st.selectbox("Skenario", ratios_available, index=len(ratios_available)-1,
-                         format_func=lambda v: f"{v}% dari batas bersama")
-        available_algorithms = [a for a in ALGORITHMS if (r, a) in output["labels"]]
-        if available_algorithms:
-            a = st.selectbox("Algoritma", available_algorithms)
-            mode = st.radio("Metode proyeksi 2D", ["PCA", "UMAP (opsional)"], horizontal=True)
-            idx = output["indices"][r]
-            sample = rfm.iloc[idx].reset_index(drop=True)
-            X, _ = make_features(sample, scaler, quantile_pct / 100)
-            labels = output["labels"][(r, a)]
-            figure = plot_clusters(X, labels, sample, mode, seed)
-            if figure is not None:
-                st.plotly_chart(figure[0], use_container_width=True)
-                st.caption(figure[1])
-            details = cluster_details(sample, labels)
-            st.markdown("**Profil per klaster (median dalam satuan asli)**")
-            st.dataframe(details.round(2), use_container_width=True, hide_index=True)
-            fig_size = px.bar(details, x="Klaster", y="Pelanggan", title="Ukuran tiap klaster",
-                              text_auto=True)
-            st.plotly_chart(fig_size, use_container_width=True)
-            st.caption("Noise DBSCAN (label -1) dijelaskan terpisah dan tidak dimasukkan "
-                       "ke skor silhouette/DB/CH. Nomor klaster tidak menunjukkan peringkat.")
-            export_labels = sample.copy()
-            export_labels["Klaster"] = labels
-            st.download_button("Unduh label pelanggan per skenario (CSV)",
-                               data=export_labels.to_csv(index=False).encode("utf-8-sig"),
-                               file_name=f"label_{a.lower().replace(' ', '_')}_{r}persen.csv", mime="text/csv")
+with tab_item:
+    st.subheader("Frequent itemset dan validasi kesetaraan hasil")
+    st.markdown("Frequent itemset adalah kumpulan 1–3 barang yang kemunculannya memenuhi minimal support. "
+                "Apriori, FP-Growth, dan Eclat **harus menghasilkan daftar itemset dan count yang sama**, bukan sekadar jumlahnya sama.")
+    result = result_if_available()
+    if result is None:
+        st.info("Jalankan benchmark terlebih dahulu pada tab 2.")
+    else:
+        selections = sorted(result.counts_by_scenario)
+        chosen = st.selectbox("Pilih skenario (proporsi data, support)", selections,
+                              format_func=lambda x: f"{x[0]}% invoice — min support {x[1]}%", key="items_scenario")
+        itemcounts = result.counts_by_scenario[chosen]
+        frac, sup = chosen
+        n = int(result.summary.loc[(result.summary["Proporsi (%)"] == frac) &
+                                   (result.summary["Support minimum (%)"] == sup), "Jumlah invoice"].iloc[0])
+        mc = min_count_for(n, sup / 100)
+        ia, ib, ic, id_ = st.columns(4)
+        ia.metric("Itemset frequent", pretty_int(len(itemcounts)))
+        ib.metric("Itemset 1 barang", pretty_int(sum(len(x) == 1 for x in itemcounts)))
+        ic.metric("Itemset 2 barang", pretty_int(sum(len(x) == 2 for x in itemcounts)))
+        id_.metric("Itemset 3 barang", pretty_int(sum(len(x) == 3 for x in itemcounts)))
+        st.success(f"Validasi cocok: hasil Apriori = FP-Growth = Eclat | {pretty_int(n)} invoice | support minimal {mc} invoice.")
+        table = counts_frame(itemcounts, n, products)
+        if not table.empty:
+            table = table.sort_values(["Support count", "Panjang", "Kode barang"],
+                                      ascending=[False, True, True])
+            selected_length = st.multiselect("Tampilkan panjang itemset", [1, 2, 3], default=[1, 2, 3])
+            table = table[table["Panjang"].isin(selected_length)]
+            st.dataframe(table, hide_index=True, use_container_width=True)
+            st.download_button("Unduh frequent itemset CSV", csv_bytes(table),
+                               file_name=f"itemset_{frac}persen_support{sup}.csv", mime="text/csv")
         else:
-            st.warning("Tidak ada hasil model yang berhasil untuk skenario terpilih.")
+            st.warning("Tidak ditemukan itemset frequent pada ambang ini.")
+        st.caption("'Count' adalah jumlah invoice yang memuat seluruh barang dalam itemset, bukan jumlah unit atau nilai penjualan.")
 
-    with tab_method:
-        st.subheader("Unduh hasil eksperimen")
-        st.download_button("Unduh ringkasan pengujian (CSV)",
-                           data=summary.to_csv(index=False).encode("utf-8-sig"),
-                           file_name="ringkasan_clustering.csv", mime="text/csv")
-        st.download_button("Unduh pengulangan waktu mentah (CSV)",
-                           data=output["raw"].to_csv(index=False).encode("utf-8-sig"),
-                           file_name="waktu_mentah.csv", mime="text/csv")
-        st.download_button("Unduh profil seluruh klaster (CSV)",
-                           data=output["profiles"].to_csv(index=False).encode("utf-8-sig"),
-                           file_name="profil_klaster.csv", mime="text/csv")
-        st.download_button("Unduh metadata eksperimen (JSON)",
-                           data=json.dumps(output["metadata"], indent=2, ensure_ascii=False).encode("utf-8"),
-                           file_name="metadata_eksperimen.json", mime="application/json")
-        st.json(output["metadata"], expanded=False)
-else:
-    with tab_visual:
-        st.info("Jalankan benchmark pada tab **Benchmark & Evaluasi** untuk melihat plot dan profil klaster.")
+with tab_rule:
+    st.subheader("Aturan asosiasi: support, confidence, lift")
+    st.markdown("Aturan **A → B** menyatakan peluang B hadir pada invoice yang memuat A. "
+                "Arah aturan penting: confidence(A→B) umumnya **berbeda** dari confidence(B→A). "
+                "Lift adalah rasio peluang bersama terhadap baseline kemunculan B; bukan bukti sebab-akibat.")
+    result = result_if_available()
+    if result is None:
+        st.info("Jalankan benchmark di tab 2 untuk membangkitkan aturan dari itemset yang telah divalidasi.")
+    else:
+        choices = sorted(result.counts_by_scenario)
+        selected = st.selectbox("Skenario untuk aturan asosiasi", choices,
+                                format_func=lambda x: f"{x[0]}% invoice — support {x[1]}%", key="rule_scenario")
+        fra, sup = selected
+        row = result.summary.loc[(result.summary["Proporsi (%)"] == fra) &
+                                 (result.summary["Support minimum (%)"] == sup)].iloc[0]
+        count_invoices = int(row["Jumlah invoice"])
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            confidence = st.slider("Confidence minimal (%)", 0, 100, 30, 5,
+                                   help="30% adalah ambang ekspor aturan pada PowerPoint.")
+        with col_b:
+            format_rules = st.radio("Bentuk aturan", ["Pasangan 1 → 1 (seperti slide)", "Semua aturan sampai L"],
+                                    help="Untuk membandingkan 18 aturan di slide pilih pasangan 1→1.")
+        with col_c:
+            min_lift = st.number_input("Lift minimal", 0.0, 50.0, 0.0, 0.5)
+        rules = make_rules(result.counts_by_scenario[selected], count_invoices,
+                           min_confidence=confidence / 100,
+                           pair_only=format_rules.startswith("Pasangan"),
+                           min_lift=float(min_lift), products=products)
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Jumlah aturan", pretty_int(len(rules)))
+        col2.metric("Confidence minimum", f"{confidence}%")
+        col3.metric("Support minimum", f"{sup}%")
+        if rules.empty:
+            st.warning("Tidak ada aturan yang memenuhi parameter sekarang. Coba turunkan confidence atau lift.")
+        else:
+            show = rules.copy()
+            numeric = ["Support (%)", "Confidence (%)", "Lift"]
+            show[numeric] = show[numeric].round(3)
+            st.dataframe(show, hide_index=True, use_container_width=True)
+            st.download_button("Unduh aturan CSV", csv_bytes(rules),
+                               file_name=f"aturan_{fra}persen_support{sup}_conf{confidence}.csv", mime="text/csv")
+            chart = px.scatter(rules, x="Support (%)", y="Confidence (%)", size="Lift",
+                               color="Lift", hover_name="Antecedent", hover_data=["Consequent", "Count A∩B"],
+                               title="Sebaran support–confidence (ukuran titik = lift)")
+            st.plotly_chart(chart, use_container_width=True)
+        if selected == (100, 3) and confidence <= 30 and min_lift <= 16:
+            st.markdown("#### Contoh rujukan dari PowerPoint: cangkir Regency")
+            st.info("Kombinasi **22697 → 22698** ada pada **632 dari 19.960 invoice** (support ≈3,17%). "
+                    "Confidence arah 22697→22698 ≈62,39%; arah sebaliknya ≈82,61%; lift ≈16,28. "
+                    "Berarti ko-kemunculan jauh lebih sering daripada baseline independen, **bukan** hubungan sebab-akibat.")
 
 with tab_method:
+    st.subheader("Landasan metodologi dan hubungan dengan slide")
     st.markdown("""
-### Keputusan metodologis dan keterbatasan
+**Topik tugas yang benar:** Kelompok 2 — Topik 3, *Association Rule Mining: Penemuan Pola Asosiasi Transaksi*.
 
-1. **Unit analisis:** CustomerID (pelanggan), bukan itemset, StockCode, atau invoice.
-   Satu invoice dapat memiliki banyak baris barang; `Frequency` menghitung invoice unik.
-2. **Pembersihan transaksi:** invoice berawalan `C`, invoice/kode produk kosong,
-   Quantity ≤ 0, dan UnitPrice ≤ 0 dikeluarkan. Baris tanpa CustomerID juga
-   dikeluarkan **untuk clustering pelanggan**. Retur tidak diperhitungkan dalam Monetary.
-3. **Fitur:** `Recency = (tanggal maksimum dataset + satu hari) - tanggal belanja terakhir`;
-   `Frequency = jumlah invoice unik`; `Monetary = Σ(Quantity × UnitPrice)`.
-   Ketiganya di-`log1p` lalu diskalakan. Opsional pemotongan atas kuantil sebelum log.
-4. **Skenario adil:** 25%, 50%, 100% dari **batas pelanggan bersama**,
-   subset bertingkat seed tetap. Semua algoritma menerima observasi serta fitur identik.
-   Data sumber dapat lebih banyak dari batas, sehingga 100% bukan berarti 100% Excel.
-5. **Kualitas klaster:** Silhouette (↑), Davies–Bouldin (↓), Calinski–Harabasz (↑)
-   adalah metrik internal pada ruang RFM terskalakan. Tidak ada label kebenaran,
-   sehingga akurasi/precision/recall tidak relevan.
-6. **Noise DBSCAN:** label `-1` tidak masuk ketiga metrik kualitas; laporkan
-   jumlah, persentase, dan cakupannya. Jika semua noise/hanya satu klaster,
-   skor kualitas **tidak terdefinisi** dan dibiarkan kosong, bukan nol.
-7. **Waktu:** `perf_counter` untuk tiap `fit_predict`, estimator baru per pengulangan;
-   median utama dan CV, Q1/Q3 pelengkap. Pembacaan Excel, feature engineering,
-   scaling, evaluasi, plotting, dan ekspor **di luar** stopwatch.
-8. **Memori:** satu fit terpisah per kondisi. `tracemalloc` menghitung peak
-   alokasi Python (bukan semua alokasi C/native). RSS dipantau periodik pada
-   proses aplikasi yang sama: indikasi praktis, bukan peak eksak dan bukan
-   eksperimen terisolasi. Jangan menjumlahkan keduanya.
-9. **Mitigasi skala:** DBSCAN serta Agglomerative dapat mendekati O(n²) waktu/memori.
-   Maksimum bersama 3.000 pelanggan (default 1.200), sampel silhouette maksimal
-   1.200, dan pembuatan seluruh jarak pasangan tidak dilakukan secara eksplisit.
-   Pengukuran skala merupakan observasi empiris, **bukan pembuktian Big-O**.
-10. **Grafik PCA/UMAP:** hanya proyeksi untuk interpretasi. Metrik kualitas
-    tidak dihitung dari koordinat 2D. Klaster pelanggan bukan aturan asosiasi.
+- **Apriori:** pencarian per tingkat; membuat kandidat itemset, memangkas kandidat yang subsetnya tidak frequent, dan menghitung dukungan dengan memindai basket.
+- **FP-Growth:** menyusun FP-tree dan basis pola kondisional; menggali frequent itemset tanpa enumerasi kandidat ala Apriori.
+- **Eclat:** mengubah representasi menjadi *vertical tidset* (bitset), kemudian mencari itemset dengan irisan TID secara *depth-first*.
 
-**Yang bisa diadaptasi dari slide lama:** proporsi 25/50/100, seed, replikasi
-waktu dan median, CV dan kuartil, pengukuran memori terpisah, grafik skala,
-serta pelaporan lingkungan. **Yang tidak dibawa:** threshold support 3/5/8,
-confidence, lift, frekuensi itemset, dan klaim kesetaraan output algoritma
-Apriori/FP-Growth/Eclat.
+**Protokol yang diadaptasi persis:** dataset sama, filter sama, L=3, `seed=42`, sampel bersarang 25%, 50%, 100%, threshold support 3%, 5%, 8%, `min_count=ceil(s·n)`, serta validasi count identik.
+**Pengukuran:** 10 ulangan waktu untuk meniru slide (median) dan satu run memori terpisah. Memori `tracemalloc` **bukan** total RAM, sehingga jangan mencampurnya dengan delta RSS.
+
+**Batas interpretasi:** beda waktu antara aplikasi ini dan PowerPoint bisa berasal dari algoritma Python yang ditulis ulang, versi Python/library, jumlah proses, cache, dan komputer. Tiga ukuran sampel tidak membuktikan kelas kompleksitas Big-O.
 """)
-    st.caption("Kode, hasil audit, dataset mentah, CSV RFM siap pakai, dan referensi tugas tersedia dalam paket proyek ZIP.")
+    with st.expander("Lihat kesembilan jumlah itemset pada PowerPoint (nilai referensi)", expanded=True):
+        reference = pd.DataFrame([
+            (25, 3, 4990, 150), (25, 5, 4990, 33), (25, 8, 4990, 4),
+            (50, 3, 9980, 141), (50, 5, 9980, 33), (50, 8, 9980, 4),
+            (100, 3, 19960, 142), (100, 5, 19960, 36), (100, 8, 19960, 4),
+        ], columns=["Proporsi (%)", "Support (%)", "Invoice", "Jumlah itemset referensi PPT"])
+        st.dataframe(reference, hide_index=True, use_container_width=True)
+        st.caption("Angka ini diambil dari lampiran slide, BUKAN diukur ulang pada runtime saat ini. Bandingkan dengan tab Itemset & Validasi setelah benchmark.")
+    with st.expander("Rumus support, confidence, dan lift"):
+        st.latex(r"\mathrm{support}(A) = \frac{\#\{t: A \subseteq t\}}{N}")
+        st.latex(r"\mathrm{confidence}(A\to B) = \frac{\mathrm{support}(A\cup B)}{\mathrm{support}(A)}")
+        st.latex(r"\mathrm{lift}(A\to B) = \frac{\mathrm{confidence}(A\to B)}{\mathrm{support}(B)}")
+        st.write("Support di UI ditampilkan dalam persen; support count adalah pembilangnya. "
+                 "Lift >1 = asosiasi positif, =1 = mendekati independen, <1 = asosiasi negatif pada distribusi ini.")
+    with st.expander("Pertanyaan dosen yang umum"):
+        st.markdown("""
+**Mengapa ini bukan clustering?** Outputnya itemset frequent dan aturan barang A→B, bukan label kelompok pelanggan.
+
+**Mengapa CustomerID kosong tetap ada?** Karena unit analisis adalah InvoiceNo, bukan CustomerID.
+
+**Mengapa aturan kedua arah bisa berbeda?** Confidence dibagi support antecedent; support gabungan serta lift sama untuk kedua arah.
+
+**Mengapa Eclat/FP-Growth dan Apriori harus identik?** Untuk data, ambang support, dan batas panjang yang sama, ketiganya algoritma frequent itemset eksak.
+
+**Apakah 18 aturan berarti 18 pasangan?** Tidak: pada support 3%, confidence 30%, dan filter 1→1 terdapat 18 **aturan berarah** dari 9 pasangan produk.
+
+**Apakah lift besar berarti rekomendasi pasti menguntungkan?** Tidak. Lift bukan profit atau bukti kausalitas; margin, penjualan, musiman, dan validasi temporal belum diuji.
+
+**Mengapa waktu benchmark tidak sama dengan slide?** Kode implementasi dan perangkat keras berbeda, meskipun output itemset bisa identik.
+
+**Apakah 10 kali pengukuran memori?** Tidak. Sepuluh pengulangan hanya waktu, sementara memori satu eksekusi instrumentasi terpisah.
+""")
+    st.markdown("#### Ekspor hasil penelitian")
+    result = result_if_available()
+    if result is None:
+        st.caption("Jalankan benchmark agar tautan ekspor hasil aktif.")
+    else:
+        bundle = io.BytesIO()
+        with ZipFile(bundle, "w", compression=ZIP_DEFLATED) as z:
+            z.writestr("ringkasan_benchmark.csv", csv_bytes(result.summary))
+            z.writestr("ulangan_waktu.csv", csv_bytes(result.durations))
+            z.writestr("pengukuran_memori.csv", csv_bytes(result.memory))
+            metadata = {**result.metadata, "audit_dataset": audit}
+            z.writestr("metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
+            for (frac, support), count_map in result.counts_by_scenario.items():
+                n = int(result.summary.loc[(result.summary["Proporsi (%)"] == frac) &
+                                           (result.summary["Support minimum (%)"] == support), "Jumlah invoice"].iloc[0])
+                z.writestr(f"itemset_{frac}p_support{support}p.csv", csv_bytes(counts_frame(count_map, n, products)))
+                rules = make_rules(count_map, n, .30, pair_only=True, products=products)
+                z.writestr(f"aturan_pasangan_{frac}p_support{support}p.csv", csv_bytes(rules))
+        st.download_button("📦 Unduh paket seluruh hasil CSV + metadata JSON (.zip)",
+                           bundle.getvalue(), file_name="hasil_benchmark_association_kelompok2.zip",
+                           mime="application/zip", type="primary")
+        st.json(result.metadata, expanded=False)
+    st.caption("Acuan dataset: https://archive.ics.uci.edu/dataset/352/online+retail • Acuan rancangan: PowerPoint 'Perbandingan Apriori, FP-Growth, dan Eclat'.")

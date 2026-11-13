@@ -1,26 +1,17 @@
 {
   "baris_awal": 541909,
-  "baris_valid_aturan_asosiasi": 530104,
-  "baris_valid_rfm": 397884,
   "baris_invoice_dibatalkan": 9288,
   "baris_quantity_nonpositif": 10624,
   "baris_harga_nonpositif": 2517,
-  "baris_tanpa_customer_id_setelah_filter_dasar": 132220,
-  "jumlah_invoice_valid_dasar": 19960,
-  "jumlah_stockcode_unik_valid_dasar": 3922,
-  "jumlah_invoice_valid_rfm": 18532,
-  "jumlah_pelanggan": 4338,
-  "tanggal_minimum_rfm": "2010-12-01",
-  "tanggal_maksimum_rfm": "2011-12-09",
-  "tanggal_referensi": "2011-12-10",
-  "sumber": "Online_Retail.xlsx",
-  "sha256_xlsx": "43465a06f2ccf7c8b5bd2892bc7defb52f97487934fe93b16ae4c3936424676d",
-  "unit_clustering": "pelanggan (CustomerID), bukan invoice atau StockCode",
-  "filter_rfm": "Invoice bukan C*, Invoice/StockCode terisi, Quantity>0, UnitPrice>0, CustomerID+InvoiceDate terisi",
-  "definisi": {
-    "Recency": "hari dari pembelian terakhir hingga 2011-12-10 (tanggal maksimum +1 hari)",
-    "Frequency": "jumlah InvoiceNo unik valid per CustomerID",
-    "Monetary": "jumlah Quantity*UnitPrice dari baris positif; bukan laba bersih dan tidak mencakup retur"
-  },
-  "catatan": "Hitungan filter dapat bertumpang tindih; baris valid asosiasi memasukkan CustomerID yang hilang."
+  "baris_valid": 530104,
+  "baris_valid_tanpa_customer_id": 132220,
+  "jumlah_invoice": 19960,
+  "jumlah_produk_unik": 3922,
+  "total_kemunculan_produk_unik_dalam_invoice": 519602,
+  "jumlah_invoice_kosong": 0,
+  "sha256_sumber": "43465a06f2ccf7c8b5bd2892bc7defb52f97487934fe93b16ae4c3936424676d",
+  "berkas_sumber": "Online_Retail.xlsx",
+  "aturan_filter": "InvoiceNo tidak kosong dan bukan pembatalan awalan C, StockCode tidak kosong, Quantity > 0, UnitPrice > 0.",
+  "unit_analisis": "Satu InvoiceNo = satu transaksi; StockCode unik per invoice; CustomerID kosong tetap disertakan.",
+  "catatan": "Jumlah kondisi gagal filter bisa bertumpang tindih; baris valid berbeda dari jumlah kemunculan unik."
 }

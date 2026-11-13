@@ -1,132 +1,176 @@
-"""Benchmark tiga algoritma; semua dilatih pada fitur yang sama.
+"""Pengujian benchmark; waktu median ulangan dan memori satu run terpisah.
 
-- Waktu: perf_counter dan model baru setiap pengulangan, tanpa preprocessing.
-- Memori: tracemalloc peak (alokasi Python), dan sampel peak RSS melalui psutil.
-  Keduanya dicatat terpisah dan tidak dianggap sebagai memori native eksak.
+Periode waktu: materialisasi struktur data internal + proses mining.
+Di luar waktu: pembacaan file, filter awal, pemilihan subset, plotting, ekspor, aturan.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 import gc
+import os
 import platform
-import threading
+import sys
 import time
 import tracemalloc
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Callable, Iterable
 
 import numpy as np
-import psutil
-from sklearn import __version__ as SKLEARN_VERSION
-from sklearn.cluster import AgglomerativeClustering, DBSCAN, KMeans
+import pandas as pd
+
+from .data import baskets_subset
+from .mining import ALGORITHMS, ItemsetCounts, min_count_for
 
 
-ALGORITHMS = ("K-Means", "DBSCAN", "Agglomerative")
-
-@dataclass(frozen=True)
-class Parameters:
-    k: int = 4
-    eps: float = 0.50
-    min_samples: int = 8
-    seed: int = 42
-    repeats: int = 3
-    warmups: int = 0
+@dataclass
+class BenchmarkResult:
+    summary: pd.DataFrame
+    durations: pd.DataFrame
+    memory: pd.DataFrame
+    counts_by_scenario: dict[tuple[int, int], ItemsetCounts]
+    metadata: dict
 
 
-def new_model(name: str, p: Parameters):
-    if name == "K-Means":
-        return KMeans(n_clusters=p.k, n_init=10, random_state=p.seed)
-    if name == "DBSCAN":
-        return DBSCAN(eps=p.eps, min_samples=p.min_samples, algorithm="auto", n_jobs=1)
-    if name == "Agglomerative":
-        return AgglomerativeClustering(n_clusters=p.k, linkage="ward")
-    raise ValueError(f"Algoritma tidak dikenal: {name}")
-
-
-def _fit_predict(X: np.ndarray, name: str, p: Parameters) -> np.ndarray:
-    model = new_model(name, p)
-    return np.asarray(model.fit_predict(X), dtype=int)
-
-
-def memory_one_run(X: np.ndarray, name: str, p: Parameters, poll_interval: float = 0.015) -> dict:
-    """Pengukuran RAM satu fit terpisah dari run timing, bukan replikasi memori."""
-    gc.collect()
-    process = psutil.Process()
-    baseline = process.memory_info().rss
-    readings = [baseline]
-    stop = threading.Event()
-
-    def poll():
-        while not stop.is_set():
-            try:
-                readings.append(process.memory_info().rss)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                break
-            stop.wait(poll_interval)
-
-    tracer = threading.Thread(target=poll, daemon=True)
-    tracemalloc.start()
-    tracer.start()
-    try:
-        _fit_predict(X, name, p)
-        readings.append(process.memory_info().rss)
-    finally:
-        stop.set()
-        tracer.join(timeout=1.0)
-        _, peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
+def _stats(durations: list[float]) -> dict:
+    arr = np.asarray(durations, dtype=float)
+    avg = float(arr.mean())
     return {
-        "python_peak_mib": float(peak / (1024**2)),
-        "rss_awal_mib": float(baseline / (1024**2)),
-        "rss_peak_sampel_mib": float(max(readings) / (1024**2)),
-        "rss_delta_peak_mib": float(max(0, max(readings) - baseline) / (1024**2)),
+        "Median (s)": float(np.median(arr)),
+        "Rata-rata (s)": avg,
+        "SD (s)": float(np.std(arr, ddof=1)) if len(arr) > 1 else np.nan,
+        "Q1 (s)": float(np.quantile(arr, .25)),
+        "Q3 (s)": float(np.quantile(arr, .75)),
+        "CV (%)": float(100 * np.std(arr, ddof=1) / avg) if len(arr) > 1 and avg > 0 else np.nan,
     }
 
 
-def run_algorithm(
-    X: np.ndarray, name: str, p: Parameters, measure_memory: bool = True
-) -> tuple[np.ndarray, dict, list[dict]]:
-    if len(X) < 3 or (name != "DBSCAN" and (p.k < 2 or p.k >= len(X))):
-        raise ValueError("K-Means/Agglomerative membutuhkan 2 <= k < jumlah data; data minimal 3.")
-    if p.repeats < 1:
-        raise ValueError("Jumlah pengulangan minimal satu.")
-    for _ in range(p.warmups):
-        _fit_predict(X, name, p)
-    durations = []
-    final_labels = None
-    for repeat in range(1, p.repeats + 1):
-        start = time.perf_counter()
-        labels = _fit_predict(X, name, p)
-        seconds = time.perf_counter() - start
-        durations.append(seconds)
-        final_labels = labels
-    arr = np.asarray(durations)
-    output = {
-        "algorithm": name,
-        "median_detik": float(np.median(arr)),
-        "mean_detik": float(arr.mean()),
-        "std_detik": float(arr.std(ddof=1)) if len(arr) >= 2 else np.nan,
-        "q1_detik": float(np.quantile(arr, 0.25)),
-        "q3_detik": float(np.quantile(arr, 0.75)),
-        "cv_persen": float(arr.std(ddof=1) / arr.mean() * 100) if len(arr) >= 2 and arr.mean() > 0 else np.nan,
-        "repetisi": len(arr),
-    }
-    if measure_memory:
-        output.update(memory_one_run(X, name, p))
-    else:
-        output.update({"python_peak_mib": np.nan, "rss_awal_mib": np.nan,
-                       "rss_peak_sampel_mib": np.nan, "rss_delta_peak_mib": np.nan})
-    raw = [{"algorithm": name, "ulangan": i, "detik": float(t)} for i, t in enumerate(durations, 1)]
-    return final_labels, output, raw
+def run_benchmark(
+    baskets: tuple[frozenset[str], ...],
+    fractions: Iterable[int] = (25, 50, 100),
+    supports: Iterable[int] = (3, 5, 8),
+    repeats: int = 3,
+    seed: int = 42,
+    max_len: int = 3,
+    measure_memory: bool = True,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> BenchmarkResult:
+    """Semua tiga algoritma diuji pada setiap kombinasi fraksi-support.
 
-
-def environment_info() -> dict:
-    import numpy
-    import pandas
-    return {
-        "os": platform.platform(),
-        "python": platform.python_version(),
-        "numpy": numpy.__version__,
-        "pandas": pandas.__version__,
-        "scikit_learn": SKLEARN_VERSION,
-        "cpu_logis": psutil.cpu_count(logical=True),
-        "ram_total_gib": round(psutil.virtual_memory().total / (1024**3), 2),
+    fractions/supports adalah persen bulat. Sah jika 0<fraksi<=100 dan 1<=support<=20.
+    Digunakan `random.Random(seed).shuffle` untuk sampel bersarang mengikuti slide.
+    """
+    fractions, supports = sorted(set(map(int, fractions))), sorted(set(map(int, supports)))
+    if not fractions or any(not 0 < x <= 100 for x in fractions):
+        raise ValueError("Proporsi pengujian harus antara 1% dan 100%.")
+    if not supports or any(not 1 <= x <= 20 for x in supports):
+        raise ValueError("Support harus 1–20%; protokol utama slide adalah 3, 5, 8%.")
+    if not 1 <= repeats <= 10:
+        raise ValueError("Pengulangan harus 1–10.")
+    if max_len not in (1, 2, 3):
+        raise ValueError("Batas panjang itemset hanya 1, 2 atau 3.")
+    if not baskets:
+        raise ValueError("Tidak terdapat invoice untuk dievaluasi.")
+    summary_rows, duration_rows, memory_rows = [], [], []
+    canonical_by_scenario = {}
+    total_steps = len(fractions) * len(supports) * len(ALGORITHMS)
+    step = 0
+    for fraction in fractions:
+        selected = baskets_subset(baskets, seed, fraction / 100)
+        total = len(selected)
+        for support in supports:
+            count_limit = min_count_for(total, support / 100)
+            expected: ItemsetCounts | None = None
+            for algorithm_name, algorithm in ALGORITHMS.items():
+                step += 1
+                if progress:
+                    progress(step - 1, total_steps, f"{fraction}% data / support {support}% / {algorithm_name}")
+                measured = []
+                last_result: ItemsetCounts | None = None
+                for run in range(1, repeats + 1):
+                    gc.collect()
+                    start = time.perf_counter()
+                    current = algorithm(selected, count_limit, max_len)
+                    measured_seconds = time.perf_counter() - start
+                    measured.append(measured_seconds)
+                    if last_result is not None and last_result != current:
+                        raise AssertionError(f"Hasil tidak deterministik pada {algorithm_name}.")
+                    last_result = current
+                    duration_rows.append({
+                        "Proporsi (%)": fraction, "Support minimum (%)": support,
+                        "Jumlah invoice": total, "Min count": count_limit,
+                        "Algoritma": algorithm_name, "Ulangan": run,
+                        "Waktu (s)": measured_seconds,
+                    })
+                assert last_result is not None
+                if expected is None:
+                    expected = last_result
+                    canonical_by_scenario[(fraction, support)] = expected
+                if last_result != expected:
+                    raise AssertionError(
+                        f"VALIDASI GAGAL pada {fraction}%/{support}%: hasil {algorithm_name} "
+                        "tidak identik dengan Apriori (itemset dan support count)."
+                    )
+                py_peak_mib = np.nan
+                delta_rss_mib = np.nan
+                if measure_memory:
+                    # Tidak digabung dengan pengulangan waktu: tracemalloc menambah overhead.
+                    gc.collect()
+                    try:
+                        import psutil
+                        proc = psutil.Process(os.getpid())
+                        before = proc.memory_info().rss
+                    except (ImportError, OSError):
+                        proc, before = None, 0
+                    tracemalloc.start()
+                    try:
+                        mem_result = algorithm(selected, count_limit, max_len)
+                        _, peak = tracemalloc.get_traced_memory()
+                    finally:
+                        tracemalloc.stop()
+                    if mem_result != expected:
+                        raise AssertionError(f"Hasil run memori {algorithm_name} tidak konsisten.")
+                    py_peak_mib = peak / 1024**2
+                    if proc is not None:
+                        delta_rss_mib = (proc.memory_info().rss - before) / 1024**2
+                    del mem_result
+                stats = _stats(measured)
+                row = {
+                    "Proporsi (%)": fraction, "Support minimum (%)": support,
+                    "Jumlah invoice": total, "Min count": count_limit,
+                    "Algoritma": algorithm_name,
+                    "Itemset frequent": len(last_result),
+                    "Singleton": sum(len(x) == 1 for x in last_result),
+                    "Pasangan": sum(len(x) == 2 for x in last_result),
+                    "Tripel": sum(len(x) == 3 for x in last_result),
+                    "Kesetaraan output": "COCOK",
+                    "Ulangan waktu": repeats,
+                    **stats,
+                    "Peak Python (MiB)": py_peak_mib,
+                    "Delta RSS setelah (MiB)": delta_rss_mib,
+                }
+                summary_rows.append(row)
+                memory_rows.append({
+                    "Proporsi (%)": fraction, "Support minimum (%)": support,
+                    "Jumlah invoice": total, "Algoritma": algorithm_name,
+                    "Peak tracemalloc (MiB)": py_peak_mib,
+                    "Delta RSS akhir (MiB)": delta_rss_mib,
+                    "Run memori independen": 1 if measure_memory else 0,
+                })
+    if progress:
+        progress(total_steps, total_steps, "Selesai: keluaran ketiga algoritma cocok pada seluruh skenario.")
+    metadata = {
+        "nama_eksperimen": "Kelompok 2 / Topik 3 - Association Rule Mining",
+        "diambil_pada_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "python": sys.version,
+        "platform": platform.platform(),
+        "jumlah_invoice_sumber": len(baskets),
+        "proporsi_persen": fractions, "support_persen": supports,
+        "min_support_count": "ceil(support_fraction * jumlah_invoice)",
+        "seed": seed, "metode_sampling": "random.Random(seed).shuffle(invoice_urut); subset bersarang",
+        "panjang_itemset_maksimum": max_len, "ulangan": repeats,
+        "memori": "Satu run terpisah memakai peak tracemalloc; delta RSS bukan puncak RAM dan bisa negatif.",
+        "cakupan_waktu": "Membangun struktur internal + mining; tanpa file I/O, cleaning, sampling, aturan atau ekspor.",
+        "catatan": "Pengukuran deskriptif bergantung mesin, proses, dan implementasi; bukan Big-O.",
     }
+    return BenchmarkResult(pd.DataFrame(summary_rows), pd.DataFrame(duration_rows),
+                           pd.DataFrame(memory_rows), canonical_by_scenario, metadata)

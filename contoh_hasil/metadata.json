@@ -1,29 +1,42 @@
 {
-  "parameter": {
-    "limit": 1200,
-    "repeats": 3,
-    "ratios": [
-      25,
-      50,
-      100
-    ],
-    "seed": 42,
-    "k": 4,
-    "eps": 0.5,
-    "min_samples": 8,
-    "scaler": "StandardScaler",
-    "winsor": 1.0,
-    "memory": true,
-    "output": "contoh_hasil"
-  },
-  "environment": {
-    "os": "Linux-6.18.57-x86_64-with-glibc2.41",
-    "python": "3.13.5",
-    "numpy": "2.3.5",
-    "pandas": "2.2.3",
-    "scikit_learn": "1.8.0",
-    "cpu_logis": 5,
-    "ram_total_gib": 5.81
-  },
-  "catatan": "Semua algoritma memakai subset sama; metrik kualitas DBSCAN mengecualikan noise."
+  "nama_eksperimen": "Kelompok 2 / Topik 3 - Association Rule Mining",
+  "diambil_pada_utc": "2026-11-13T06:58:08+00:00",
+  "python": "3.13.5 (main, Jul 15 2026, 20:25:40) [GCC 14.2.0]",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "jumlah_invoice_sumber": 19960,
+  "proporsi_persen": [
+    25,
+    50,
+    100
+  ],
+  "support_persen": [
+    3,
+    5,
+    8
+  ],
+  "min_support_count": "ceil(support_fraction * jumlah_invoice)",
+  "seed": 42,
+  "metode_sampling": "random.Random(seed).shuffle(invoice_urut); subset bersarang",
+  "panjang_itemset_maksimum": 3,
+  "ulangan": 3,
+  "memori": "Satu run terpisah memakai peak tracemalloc; delta RSS bukan puncak RAM dan bisa negatif.",
+  "cakupan_waktu": "Membangun struktur internal + mining; tanpa file I/O, cleaning, sampling, aturan atau ekspor.",
+  "catatan": "Pengukuran deskriptif bergantung mesin, proses, dan implementasi; bukan Big-O.",
+  "audit": {
+    "baris_awal": 541909,
+    "baris_invoice_dibatalkan": 9288,
+    "baris_quantity_nonpositif": 10624,
+    "baris_harga_nonpositif": 2517,
+    "baris_valid": 530104,
+    "baris_valid_tanpa_customer_id": 132220,
+    "jumlah_invoice": 19960,
+    "jumlah_produk_unik": 3922,
+    "total_kemunculan_produk_unik_dalam_invoice": 519602,
+    "jumlah_invoice_kosong": 0,
+    "sha256_sumber": "43465a06f2ccf7c8b5bd2892bc7defb52f97487934fe93b16ae4c3936424676d",
+    "berkas_sumber": "Online_Retail.xlsx",
+    "aturan_filter": "InvoiceNo tidak kosong dan bukan pembatalan awalan C, StockCode tidak kosong, Quantity > 0, UnitPrice > 0.",
+    "unit_analisis": "Satu InvoiceNo = satu transaksi; StockCode unik per invoice; CustomerID kosong tetap disertakan.",
+    "catatan": "Jumlah kondisi gagal filter bisa bertumpang tindih; baris valid berbeda dari jumlah kemunculan unik."
+  }
 }

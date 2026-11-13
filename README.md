@@ -1,145 +1,162 @@
-# Lab Clustering Kelompok 2 — UCI Online Retail
+# Kelompok 2 — Topik 3: Association Rule Mining
 
-Aplikasi **Streamlit berbahasa Indonesia** untuk menganalisis dan membandingkan **K-Means, DBSCAN, dan Agglomerative Clustering** pada segmentasi pelanggan menggunakan fitur **RFM** (Recency, Frequency, Monetary).
+**Judul tugas:** *Association Rule Mining: Penemuan Pola Asosiasi Transaksi*  
+**Aplikasi:** Streamlit untuk perbandingan **Apriori, FP-Growth, dan Eclat** pada **UCI Online Retail**.  
+**Status:** pengganti proyek clustering/RFM sebelumnya, sesuai penugasan kelompok dan PowerPoint *Perbandingan Apriori, FP-Growth, dan Eclat*.
 
-> **Beda tugas:** gambar instruksi Kelompok 2 berisi **clustering**, sedangkan PowerPoint yang diunggah berisi **association rule mining** (Apriori, FP-Growth, Eclat). Keduanya bukan algoritma sejenis. Hasil support, confidence, lift, dan frequent itemsets pada slide tidak ditafsirkan sebagai hasil clustering. Yang diadaptasi hanya desain eksperimennya: subset 25/50/100%, pengulangan waktu, median, profil memori, uji validitas, dan grafik skalabilitas.
+## 1. Apa yang berubah?
 
-## Jalankan aplikasi
+| Sebelum (keliru) | Versi ini (sesuai penugasan) |
+|---|---|
+| Clustering pelanggan berbasis RFM | Frequent itemset mining dan aturan asosiasi antarbarang |
+| K-Means, DBSCAN, Agglomerative | Apriori, FP-Growth, Eclat |
+| Baris analisis: pelanggan/CustomerID | Baris analisis: **InvoiceNo (basket)** |
+| Evaluasi Silhouette, Davies–Bouldin | **Validasi itemset/count**, support, confidence, lift |
+| PCA dan klaster | Grafik benchmark, daftar frequent itemset, pola aturan |
 
-**Prasyarat:** Python **3.11 atau 3.12**, minimal 4 GB RAM (disarankan 8 GB untuk Excel mentah), sistem Windows/macOS/Linux. Akses internet dibutuhkan **hanya sekali untuk mengunduh library** jika belum terpasang. Setelah itu aplikasi dan dataset bawaan bisa digunakan secara lokal tanpa internet.
+**PowerPoint awal sekarang memang topik yang benar.** Tidak perlu mempresentasikan aplikasi clustering lama.
 
-### Windows PowerShell
+## 2. Menjalankan aplikasi
 
-```powershell
-cd kelompok2_clustering_streamlit
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-streamlit run app.py
-```
-
-Jika `py -3.12` tidak tersedia, gunakan `python -m venv .venv`. PowerShell mungkin memerlukan pengaturan izin aktivasi; sebagai alternatif jalankan `.\.venv\Scripts\python.exe -m streamlit run app.py` tanpa mengaktifkan venv.
-
-### Linux/macOS
+Gunakan Python 3.10–3.13 (disarankan 3.11/3.12). Dari folder hasil ekstraksi:
 
 ```bash
-cd kelompok2_clustering_streamlit
-python3 -m venv .venv
+python -m venv .venv
+# Windows:
+.venv\Scripts\activate
+# Linux/macOS:
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+
+pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Buka URL lokal yang ditampilkan di terminal (umumnya `http://localhost:8501`). **Tidak perlu mengunggah dataset lagi:** aplikasi langsung membuka `data/customer_rfm.csv`, yang sudah dihitung dari berkas Excel asli dalam paket.
+Buka `http://localhost:8501` jika browser tidak otomatis terbuka.
 
-### Alur di antarmuka
+**Tidak perlu menjalankan ulang preprocessing**: paket sudah memuat `data/transactions.csv.gz` (~1,1 MB), `data/products.csv`, dan `data/audit.json`. Data Excel sumber asli (`data/Online_Retail.xlsx`, ~23 MB) disertakan agar eksperimen dapat diaudit. Sumber PowerPoint juga disertakan.
 
-1. Tab **Data & Audit:** cek jumlah baris dan statistik RFM. Pilih CSV bawaan, unggah `Online Retail.xlsx`, atau unggah CSV RFM sendiri.
-2. Panel kiri **Pra-pemrosesan:** pilih scaler, pemotongan kuantil (opsional), dan seed acak.
-3. Panel kiri **Eksperimen:** tentukan **batas pelanggan bersama** (awal 1.200; maksimal 3.000), proporsi 25/50/100%, k, eps, min_samples, jumlah pengulangan (1–10), warm-up, dan pengukuran memori.
-4. Tab **Benchmark & Evaluasi:** klik **Jalankan benchmark**; lihat tabel, grafik kualitas, waktu, sebaran, noise, dan memori.
-5. Tab **Visualisasi Klaster:** pilih proporsi dan algoritma; jelajahi grafik PCA dan profil RFM, lalu unduh label per pelanggan.
-6. Tab **Metodologi & Unduhan:** baca keterbatasan dan unduh CSV pengujian, CSV timing mentah, profil klaster, dan JSON metadata.
+### Menayangkan versi baru pada Streamlit Cloud
 
-**Opsional UMAP:** instal `pip install umap-learn`, lalu pilih UMAP di tab Visualisasi. PCA tidak membutuhkan paket tambahan.
+Aplikasi yang saat ini berada di URL `https://labclustering-srtqddxud5wuxac3kmw7xz.streamlit.app/` **tidak otomatis berubah** hanya karena ZIP ini telah dibuat. Untuk memperbaruinya:
 
-## Inventaris proyek
+1. Salin berkas proyek versi baru ke repositori GitHub yang terhubung dengan aplikasi Streamlit Cloud (sebaiknya buat commit/cabang baru atau cadangkan versi clustering terlebih dahulu).
+2. Pastikan `app.py`, `requirements.txt`, `src/`, `data/transactions.csv.gz`, `data/products.csv`, dan `data/audit.json` ikut ter-commit. Jangan memblokir file `.gz` di `.gitignore`.
+3. Di Streamlit Cloud, pilih aplikasi yang ada lalu *Manage app* → pengaturan repository/branch dan jalur utama `app.py`, atau buat aplikasi baru jika ingin mempertahankan yang lama.
+4. *Reboot* atau *redeploy* sesuai antarmuka Cloud, buka halaman dan pastikan judul **Lab Association Rule Mining** tampil.
+5. Lakukan uji skenario cepat lalu skenario 100%, support 3% (atau penuh) untuk memverifikasi aturan slide.
 
-```text
-kelompok2_clustering_streamlit/
-├── app.py                            # aplikasi Streamlit, UI dalam bahasa Indonesia
-├── requirements.txt                   # dependency runtime
-├── requirements-dev.txt               # dependency termasuk pytest
-├── README.md                          # petunjuk ini
-├── AUDIT_DAN_METODOLOGI.md            # audit data, slide, desain pengujian
-├── HASIL_CONTOH.md                    # interpretasi contoh output benchmark
-├── .streamlit/config.toml             # pengaturan tema dan kapasitas upload
-├── src/
-│   ├── __init__.py
-│   ├── preprocessing.py               # filter transaksi, agregasi RFM, transformasi fitur
-│   ├── benchmark.py                   # estimator, benchmark berulang, memori
-│   └── evaluation.py                  # metrik tanpa ground truth, profil klaster
-├── data/
-│   ├── Online_Retail.xlsx             # dataset asli unggahan (541.909 baris)
-│   ├── customer_rfm.csv               # fitur siap pakai (4.338 pelanggan)
-│   └── audit.json                     # hasil audit dan checksum sumber
-├── scripts/
-│   ├── audit_dataset.py               # audit XLSX streaming dan regenerasi RFM
-│   └── benchmark_cli.py               # benchmark tanpa antarmuka browser
-├── contoh_hasil/                     # CSV+JSON benchmark contoh 1.200 pelanggan
-├── tests/
-│   ├── test_preprocessing.py
-│   ├── test_evaluation.py
-│   ├── test_benchmark.py
-│   └── test_precomputed.py
-└── referensi/
-    ├── instruksi_kelompok_2.png
-    └── slide_association_rule_mining_asli.pptx
-```
+Saran: `data/Online_Retail.xlsx` dan file PowerPoint **boleh tidak dimasukkan** ke repositori deployment untuk menghemat bandwidth karena tidak digunakan saat menjalankan Streamlit. Namun, pertahankan dalam arsip ZIP penelitian demi keterlacakan. Jika tidak memasukkan Excel pada repo, audit SHA-256 yang sudah tersimpan di `data/audit.json` tetap menjelaskan identitas sumber.
 
-## Mengapa satu pelanggan, bukan satu invoice?
+## 3. Cara memakai lima tab
 
-Dataset Online Retail merekam **baris produk per faktur**. Ada minimal tiga pilihan unit analisis yang tidak ekuivalen: produk, faktur, atau pelanggan. Proyek ini **secara eksplisit memilih pelanggan** karena tujuan segmentasi pembeli dan fitur RFM cukup transparan untuk tugas tiga algoritma clustering. Untuk dataset asli, `CustomerID` kosong sering ditemukan; baris itu dapat digunakan saat menghitung asosiasi produk, tetapi tidak bisa dipakai untuk membangun profil pelanggan secara benar.
+1. **Dataset & Pembersihan.** Memperlihatkan angka audit, contoh basket, frekuensi StockCode, aturan filter, SHA sumber, serta unduhan basket pra-pemrosesan.
+2. **Benchmark.** Pilih mode pada sidebar, klik **Jalankan benchmark**; lihat median waktu, Q1–Q3, CV, grafik skalabilitas, tracemalloc, dan RSS. Variasi waktu hanya dihitung dari ulangan; memori satu kali terpisah.
+3. **Itemset & Validasi.** Pilih kombinasi ukuran data dan support; hasil tiga algoritma **harus identik dalam itemset dan support count**. Lihat 1-item, 2-item, 3-item dan unduh CSV.
+4. **Aturan Asosiasi.** Pilih skenario, confidence minimal (default 30%), aturan pasangan 1→1 seperti slide, dan lift minimum. Grafik support–confidence serta daftar aturan dapat diunduh. Untuk memverifikasi 18 aturan, pilih **100% / support 3%**.
+5. **Metodologi & Unduhan.** Rumus, rancangan eksperimen, FAQ, angka referensi slide yang dilabeli sebagai *referensi* (bukan hasil benchmark baru), dan paket hasil CSV + JSON metadata.
 
-**Aturan pembersihan:** hapus invoice yang diawali `C`, invoice/StockCode kosong, Quantity ≤ 0, UnitPrice ≤ 0, CustomerID kosong atau tanggal tidak valid. Untuk model pelanggan, baris return/cancel tidak dikompensasikan terhadap pembelian sebelumnya: Monetary menggambarkan **penjualan positif bruto**, **bukan** revenue bersih setelah retur, bukan laba, dan tidak mengandung margin. Satu invoice dengan banyak baris produk tetap dihitung **satu** frekuensi. Nilai negatif/zero tidak di-imputasi. Nilai di `CustomerID` dipakai sebagai ID, **bukan fitur numerik**.
+### Mode yang dianjurkan
 
-**RFM:**
+- **Demonstrasi cepat:** 25% data (4.990 invoice), support 3%, L=3, seed 42, tiga algoritma, tiga ulangan; sudah bisa menunjukkan aturan.
+- **Replikasi 9 skenario slide:** kombinasi 25/50/100% × support 3/5/8%, L=3, seed 42, 10 ulangan; menghasilkan **270 durasi individual** serta 27 pengukuran memori jika dicentang.
+- **Atur sendiri:** pilihan beberapa proporsi/support dan jumlah ulangan.
 
-- `Recency = tanggal_ref − tanggal_pembelian_terakhir` dalam hari; tanggal_ref adalah tanggal transaksi terakhir dataset **+ 1 hari**.
-- `Frequency = jumlah InvoiceNo unik` valid per CustomerID.
-- `Monetary = Σ(Quantity × UnitPrice)` valid per CustomerID.
+### Perhatian bila browser atau Cloud lambat
 
-Fitur numerik diproses menggunakan `log1p` untuk mengurangi skew lalu `StandardScaler` (default) atau `RobustScaler`; pemotongan kuantil atas 99/95% opsional (default **tidak** dipotong). Transformasi **di-fit ulang per skenario** supaya tidak menggunakan distribusi sampel lebih besar untuk skenario kecil. Tidak memasukkan `CustomerID` sebagai fitur.
+- Jalankan demo cepat lebih dahulu; hindari menjalankan beberapa benchmark penuh secara simultan dari browser rekan kelompok.
+- Mematikan pengukuran memori mengurangi beban karena instrumentation `tracemalloc` membuat proses lebih lambat. Pada mode 9 skenario opsi ini **default tidak aktif**; aktifkan secara eksplisit jika ingin memori pada semua kondisi.
+- Gunakan 3 ulangan untuk gladi, 10 ulangan untuk laporan yang ingin konsisten dengan skema PPT.
+- Jangan menyegarkan browser ketika proses sedang berlangsung; hasil berada di `st.session_state` tab/browser sehingga hilang saat sesi direstart.
 
-## Keberulangan pengujian dan keterbatasan
+## 4. Dataset dan langkah pembersihan
 
-**Kontrol perbandingan:**
+Berasal dari [UCI Online Retail](https://archive.ics.uci.edu/dataset/352/online+retail). Data mentah memiliki 541.909 baris item barang, kurun 2010-12-01 s.d. 2011-12-09. Pembersihan:
 
-- Baseline 1.200 pelanggan dipilih dari total 4.338 dengan permutasi acak seed=42; subset 25%, 50%, dan 100% adalah awalan *permutasi yang sama*, sehingga saling bersarang.
-- Satu skenario menggunakan **persis pelanggan dan representasi tiga fitur yang sama** untuk semua algoritma. Angka 100% di sini berarti **100% dari cap bersama** yang dipilih, **bukan** 100% dari 541.909 baris Excel.
-- K-Means: `n_clusters=k`, `n_init=10`, `random_state=seed`. Agglomerative: `ward`, `n_clusters=k`. DBSCAN: `eps`/`min_samples` pada tiga fitur terskalakan, `n_jobs=1`. DBSCAN menentukan jumlah klaster sendiri dan boleh memberi label noise=-1.
-- Pengukuran waktu adalah **fit_predict** model baru per pengulangan, mulai stopwatch setelah persiapan dataset. Laporan median, rata-rata, standar deviasi, Q1/Q3, dan CV. Hasil boleh berubah oleh CPU, beban perangkat, versi library, alokasi memori. Warm-up default nol dan opsional satu kali.
-- **Memori:** satu run terpisah setelah pengukuran waktu. `tracemalloc` mengukur puncak alokasi *Python*; `psutil` memantau peningkatan peak RSS tersampel relatif sebelum fit. Dua besaran tersebut **tidak boleh dijumlahkan**. Proses tidak diisolasi per algoritma; RSS sampled bukan puncak yang dijamin dan bukan penggunaan RAM total dari suatu algoritma.
-- **Silhouette** hanya untuk titik non-noise dan dibatasi maksimum 1.200 sampel dengan pemilihan terstratifikasi jika perlu. Davies–Bouldin dan Calinski–Harabasz pada seluruh titik non-noise. Bila kurang dari dua klaster atau tiap titik menjadi klaster sendiri, metrik tidak terdefinisi (kosong/NaN). **Skor DBSCAN tidak boleh dibandingkan tanpa mempertimbangkan jumlah noise/cakupan.**
-- **PCA/UMAP hanya untuk tampilan**; metrik dihitung pada fitur asli tiga dimensi terskalakan. Tidak ada kelas target, sehingga accuracy/precision/recall dan pengukuran supervised lain tidak berlaku.
-- Metrik internal tidak membuktikan kebermanfaatan bisnis; segmentasi perlu divalidasi secara substantif, misalnya interpretasi profil RFM dan evaluasi stabilitas pada periode lain.
-- Skenario 25/50/100 menampilkan **skalabilitas empiris**, bukan estimasi kelas kompleksitas Big-O yang valid dari tiga titik.
+- Hapus InvoiceNo kosong, invoice pembatalan (awalan `C`), StockCode kosong.
+- Hapus baris dengan `Quantity ≤ 0` atau `UnitPrice ≤ 0`.
+- **Pertahankan transaksi tanpa CustomerID** karena invoice sudah cukup sebagai unit analisis.
+- Ubah tiap invoice menjadi **set StockCode unik** (satu barang muncul dua kali dalam invoice = satu kehadiran).
+- Urutkan invoice secara konsisten; pilih subset dengan `random.Random(42).shuffle` sehingga 25% ⊂ 50% ⊂ 100%.
 
-**Mitigasi beban:** DBSCAN dan Agglomerative dapat memerlukan kerja/memori kuadratik pada banyak titik. Karena itu semua algoritma dibatasi **maksimal 3.000 pelanggan** (awal 1.200) agar benchmark tetap adil. Untuk penelitian formal, jalankan di proses terpisah, acak urutan algoritma, lakukan cukup banyak pengulangan, ukur RSS di luar proses (misalnya profiler/psrecord), simpan spesifikasi mesin, dan ulangi eksperimen lintas seed/hyperparameter.
+Hasil audit sumber:
 
-## Pengujian & benchmark dari terminal
+| Tahap | Jumlah |
+|---|---:|
+| Baris mentah | 541.909 |
+| Baris valid | 530.104 |
+| Invoice unik | 19.960 |
+| StockCode unik | 3.922 |
+
+Regenerasi basket dari Excel (opsional):
 
 ```bash
-python -m pip install -r requirements-dev.txt
-python -m pytest -q
-
-# Eksperimen cepat: setiap algoritma × proporsi 25/50/100
-python scripts/benchmark_cli.py --limit 600 --repeats 2 --memory
-
-# Eksperimen mendekati protokol slide (lebih berat)
-python scripts/benchmark_cli.py --limit 1200 --repeats 10 --memory
-
-# Regenerasi dataset siap pakai + audit dari XLSX asli
-python scripts/audit_dataset.py data/Online_Retail.xlsx
+python scripts/build_transactions.py
 ```
 
-Script CLI menulis `hasil/ringkasan.csv`, `hasil/ulangan_waktu.csv`, `hasil/profil_klaster.csv`, `hasil/metadata.json`. Paket juga memuat contoh pengujian 1.200 pelanggan (3 ulangan) di folder `contoh_hasil/`; nilai ini demonstrasi dari lingkungan uji, **bukan benchmark universal**.
+Script memakai parsing XLSX streaming `lxml` untuk menjaga pemakaian RAM. **Perhatian:** menjalankan ulang akan menimpa tiga file hasil praproses. Bandingkan `data/audit.json` sebelum/sesudah jika Anda melakukan perubahan filter.
 
-## Relevansi terhadap PowerPoint dan sitasi data
+## 5. Parameter eksperimen dan evaluasi
 
-- **Slide 15:** pembersihan faktur untuk asosiasi: 541.909 baris mentah → 530.104 baris valid → 19.960 invoice, 3.922 StockCode. Cocok dengan file Excel, tetapi **berbeda dari filter RFM** yang membuang pelanggan anonim.
-- **Slide 16:** 25/50/100% *invoice* + ambang support 3/5/8%; yang diambil hanya pendekatan proporsi, bukan ambang support atau perhitungan itemset.
-- **Slide 17, 19–22:** pengulangan pengukuran waktu, median, CV, memori, grafik skalabilitas, serta detail lingkungan diadaptasi dengan definisi biaya yang jelas.
-- **Slide 23:** validasi kesetaraan **frequent itemsets** tidak bisa diulang untuk tiga algoritma clustering yang berbeda objektif. Proyek ini memakai validitas numerik metrik internal, pemeriksaan label, profil, dan pengujian fungsi.
+Pada setiap kombinasi input:
 
-Lihat [`AUDIT_DAN_METODOLOGI.md`](AUDIT_DAN_METODOLOGI.md) untuk tabel audit lengkap. Rujukan dataset publik: [UCI Machine Learning Repository — Online Retail](https://archive.ics.uci.edu/dataset/352/online+retail). Dataset dan slide dalam ZIP disertakan sebagai **referensi pengguna**, tanpa mengklaim hak kepemilikan atas sumbernya.
+- **Support:** persentase invoice yang harus memuat semua barang dalam itemset. `min_count = ceil(s * n)`.
+- **L = 3:** hanya itemset berukuran 1, 2, 3 produk.
+- **Confidence min 30%:** filter *setelah* frequent itemset diperoleh. Tidak memengaruhi waktu mining.
+- **Aturan 1→1:** dibatasi pada pasangan produk agar sebanding dengan tabel pasangan pada slide.
+- **Waktu:** `time.perf_counter`; run ulang yang berbeda, **median** utama; menambahkan Q1, Q3, rata-rata, standar deviasi, CV.
+- **Memori:** `tracemalloc` *peak* sekali per kondisi/algoritma di run **terpisah**, bukan total RAM atau 10 observasi memori independen. Delta RSS tidak menunjukkan peak.
+- **Validasi:** membandingkan **seluruh dict `{itemset: count}`**, bukan hanya jumlah itemset. Pengujian unit menggunakan oracle enumerasi brute-force untuk dataset kecil.
+- **Skalabilitas:** waktu median vs jumlah invoice pada tiga ukuran; bukan pembuktian Big-O.
 
-## Kesalahan umum
+### Perbedaan versi ini dengan implementasi pada slide
 
-- `ModuleNotFoundError: streamlit` → jalankan `python -m pip install -r requirements.txt` di environment yang sama.
-- Aplikasi lambat saat unggah Excel → dataset berisi >500 ribu baris; gunakan opsi **Dataset RFM bawaan** untuk startup cepat.
-- DBSCAN menghasilkan satu klaster atau semua noise → silhouette/DB/CH kosong **memang benar**; coba nilai `eps`/`min_samples` berbeda, lalu lihat persen noise.
-- Nilai metrik berubah saat skala/quantile/seed diubah → normal: jarak antar pelanggan berubah; klik benchmark ulang.
-- CPU/RAM terbatas → turunkan batas pelanggan menjadi 300–800, ulangan menjadi 1–3, atau nonaktifkan pengukuran memori.
+Aplikasi ini memakai **implementasi independen berbasis Python** (Apriori kandidat level-wise; FP-Growth FP-tree dengan conditional mining; Eclat vertical bitset) yang seluruhnya dibuat untuk aplikasi ini. **Implementasi benchmark PPT lama tidak disertakan.** Oleh karena itu, jangan menyatakan bahwa angka waktu dan memori yang muncul adalah reproduksi angka PPT atau berasal dari komputer Windows 11 yang sama. Kesamaan output itemset pada data dan pengaturan yang sama telah dibuktikan; kecepatan dan alokasi memori bisa berbeda.
 
-**Proyek dapat dibuka dan digunakan tanpa mengganti kode.** Nilai hasil clustering dan waktu *tidak* di-hardcode: setiap tombol benchmark menghitung ulang berdasarkan pengaturan pengguna.
+**Yang sama dengan PPT:** dataset dan filter; urutan invoice; `random.Random(seed=42)`; sembilan ukuran/ambang; min count; L=3; aturan 1→1 confidence 30%. Hasil itemset pada sembilan kondisi dan 18 aturan pada data penuh support 3% cocok persis dengan tabel referensi slide.
+
+## 6. Rumus yang dipresentasikan
+
+Untuk total N invoice:
+
+- `support(A) = invoice_yang_memuat_A / N`
+- `confidence(A → B) = support(A∪B) / support(A)`
+- `lift(A → B) = confidence(A → B) / support(B)`
+
+**Contoh slide pada data penuh 3%:** `22697` (cangkir Regency hijau) dan `22698` (merah muda) muncul bersama pada **632 invoice**; support **3,17%**; confidence `22697→22698` **62,39%**, arah balik **82,61%**; lift **16,28**. Confidence bergantung arah; support dan lift simetris. Lift tinggi **tidak** menunjukkan sebab-akibat atau profit.
+
+## 7. Pengujian
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+Tes mencakup tiga algoritma melawan brute-force pada dataset sintetis, satu set kecil terkontrol, rumus aturan, sampling bersarang, seluruh **9 jumlah itemset acuan**, hitungan 632 invoice pasangan produk contoh, 18 aturan 1→1, serta benchmark kecil.
+
+## 8. Struktur proyek
+
+```
+app.py                        # Antarmuka Streamlit lima tab
+requirements.txt              # Dependensi produksi
+requirements-dev.txt          # Dependensi pengujian
+.streamlit/config.toml        # Tema aplikasi
+src/mining.py                 # Apriori / FP-Growth / Eclat
+src/rules.py                  # Support / confidence / lift
+src/benchmark.py              # Ulangan waktu, peak memori, validasi
+src/data.py                   # Loader basket dan sampling
+scripts/build_transactions.py # Preprocessing Excel streaming
+scripts/benchmark_cli.py      # Opsional: jalankan benchmark tanpa UI
+data/transactions.csv.gz      # Dataset basket siap pakai
+```
+
+Berkas sumber `data/Online_Retail.xlsx`, `data/Slide_Acuan_Association_Rule_Mining.pptx`, `data/audit.json`, `data/products.csv`, folder `contoh_hasil/` (9 skenario, 3 ulangan waktu, memori tidak diukur), dan `tests/` juga disertakan.
+
+## 9. Rujukan utama
+
+- Slide kelompok yang diunggah: *Perbandingan Apriori, FP-Growth, dan Eclat — Menemukan Pola Belanja pada Dataset UCI Online Retail*.
+- UCI Online Retail: https://archive.ics.uci.edu/dataset/352/online+retail
+- R. Agrawal & R. Srikant, *Fast Algorithms for Mining Association Rules*, 1994: https://www.vldb.org/conf/1994/P487.PDF
+- Han dkk., *Mining Frequent Patterns without Candidate Generation*: https://hanj.cs.illinois.edu/pdf/dami04_fptree.pdf
+- M. Zaki, *Scalable Algorithms for Association Mining*: https://sci2s.ugr.es/keel/pdf/algorithm/articulo/2000%20-%20IEEETKDE%20-%20Zaki%20-%20ScalableAlgorithms%20for%20Association%20Mining%20.pdf
+
+> **Catatan untuk dosen:** kesetaraan output itemset tidak sama dengan kesetaraan durasi. Waktu dan memori harus dibahas sebagai hasil spesifik implementasi dan lingkungan saat eksperimen dilakukan.
