@@ -1,0 +1,29 @@
+{
+  "parameter": {
+    "limit": 1200,
+    "repeats": 3,
+    "ratios": [
+      25,
+      50,
+      100
+    ],
+    "seed": 42,
+    "k": 4,
+    "eps": 0.5,
+    "min_samples": 8,
+    "scaler": "StandardScaler",
+    "winsor": 1.0,
+    "memory": true,
+    "output": "contoh_hasil"
+  },
+  "environment": {
+    "os": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "python": "3.13.5",
+    "numpy": "2.3.5",
+    "pandas": "2.2.3",
+    "scikit_learn": "1.8.0",
+    "cpu_logis": 5,
+    "ram_total_gib": 5.81
+  },
+  "catatan": "Semua algoritma memakai subset sama; metrik kualitas DBSCAN mengecualikan noise."
+}
